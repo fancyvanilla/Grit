@@ -1,5 +1,6 @@
 import typer
 from core import GritRepository
+from config import hide_grit
 
 def pre_check(ctx: typer.Context):
     if ctx.invoked_subcommand == "init":
@@ -14,6 +15,7 @@ app = typer.Typer(callback=pre_check, help="Grit: A simple version control syste
 @app.command()
 def init(path: str = typer.Argument("./", help="Path to initialize repository")):
     GritRepository.init(path)
+    hide_grit()
 
 @app.command()
 def add(paths: list[str] = typer.Argument(..., help="Files or directories to add")):
