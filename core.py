@@ -306,12 +306,11 @@ class GritRepository:
             })
         write_in_file(cls.index_table_path(),objects,FileType.JSON)
 
-    #FIX: make detect file type take file path instead of filename
     @classmethod
     def create_blob(cls, file_path, line_start=None, line_end=None):
         current_content = read_file(file_path, FileType.UNKNOWN)
         content = current_content
-        file_type = detect_file_type(file_path.split("/")[-1])
+        file_type = detect_file_type(file_path)
         is_section = line_start is not None and line_end is not None and file_type == FileType.TEXT
 
         # Make indexes zero based
@@ -365,7 +364,7 @@ class GritRepository:
                       if line_end < len(prev_content_in_lines):
                           content_to_add +="\n"
                       content_to_add+="\n".join(prev_content_in_lines[line_end:])
-                      
+
         new_compressed_content = cls.compress_file(content_to_add)
         current_blob_key = cls.create_blob_key(new_compressed_content)
         new_objects_tree = cls.update_objects_tree(file_path, current_blob_key)
@@ -423,8 +422,8 @@ class GritRepository:
     def _compare_commit_items(cls, item1, item2, files_changed, files_diff, current_path):
         if "blob_key" in item1 and "blob_key" in item2:
             if item1.get("blob_key") != item2.get("blob_key"):
-                file1_content = cls.read_from_key(item1["blob_key"], detect_file_type(current_path.split("/")[-1]))
-                file2_content = cls.read_from_key(item2["blob_key"], detect_file_type(current_path.split("/")[-1]))
+                file1_content = cls.read_from_key(item1["blob_key"], detect_file_type(current_path))
+                file2_content = cls.read_from_key(item2["blob_key"], detect_file_type(current_path))
                 diff = difflib.unified_diff(
                     file1_content.splitlines(),
                     file2_content.splitlines(),

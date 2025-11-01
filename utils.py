@@ -51,7 +51,8 @@ def delete_contents(dir_path):
                 continue
             shutil.rmtree(os.path.join(root, name))
 
-def detect_file_type(filename: str) -> FileType:
+def detect_file_type(filepath: str) -> FileType:
+    filename=filepath.split("/")[-1]
     filename_parts = filename.split(".")
     if len(filename_parts) == 1:
         return FileType.BINARY
