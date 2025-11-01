@@ -1,22 +1,29 @@
 import typer
-from core import GritRepository
-from config import hide_grit
+from grit.core import GritRepository
+from grit.config import hide_grit
 
 def pre_check(ctx: typer.Context):
-    if ctx.invoked_subcommand == "init":
-        return
+    if ctx.invoked_subcommand is None:
+        print("Welcome to Grit! Use `grit --help` to see available commands.")
+        raise typer.Exit()
 
-    if not GritRepository.is_current_grit_repo():
-        print("Not a Grit repository. Run 'grit init' first.")
-        raise typer.Exit(code=1)
+app = typer.Typer(callback=pre_check, invoke_without_command=True, help="Grit: A simple version control system made with ❤️")
 
-app = typer.Typer(callback=pre_check, help="Grit: A simple version control system")
+def repo_required(fn):
+    def wrapper(*args, **kwargs):
+        if not GritRepository.is_current_grit_repo():
+            print("Not a Grit repository. Run 'grit init' first.")
+            raise typer.Exit(code=1)
+        return fn(*args, **kwargs)
+    return wrapper
 
 @app.command()
 def init(path: str = typer.Argument("./", help="Path to initialize repository")):
+    """Initialize a new Grit repository."""
     GritRepository.init(path)
     hide_grit()
 
+@repo_required
 @app.command()
 def add(
     paths: list[str] = typer.Argument(None, help="Files or directories to add"),
@@ -24,6 +31,7 @@ def add(
         None, "--lines", help="Line range in the format start-end (1-based) to add from a single file"
     ),
 ):
+    """Add files or directories to the staging area."""
     if not paths:
         paths = ["./"]
     if lines:
@@ -44,14 +52,19 @@ def add(
     for p in paths:
         GritRepository.add(p)
 
+@repo_required
 @app.command()
 def commit(message: str = typer.Option(..., "-m", "--message", help="Commit message")):
+    """Commit staged changes with a message."""
     GritRepository.commit(message)
 
+@repo_required
 @app.command()
 def log():
+    """Show commit history."""
     GritRepository.log()
 
+@repo_required
 @app.command()
 def cat_file(
     p: str = typer.Option(..., "-p", help="Key to show content for")
@@ -63,8 +76,10 @@ def cat_file(
     else:
         print(f"No content found for {p}")
 
+@repo_required
 @app.command()
 def diff(commit1: str, commit2: str):
+    """Show differences between two commits."""
     try:
       files, files_diff = GritRepository.diff(commit1, commit2)
       print("Files changed:")
@@ -80,16 +95,23 @@ def diff(commit1: str, commit2: str):
         print(str(e))
         raise typer.Exit(code=1)
     
+@repo_required
 @app.command()
 def branch(branch_name: str = typer.Argument(None, help="List the branches or create a new branch if branch name is provided")):
+    """List branches or create a new branch."""
     if branch_name:
         GritRepository.branch(branch_name)
     else:
         GritRepository.list_branches()
 
+@repo_required
 @app.command()
 def checkout(branch_name: str = typer.Argument(..., help="Branch name to checkout or commit ID")):
+    """Checkout a branch or commit."""
     GritRepository.checkout(branch_name)
 
-if __name__ == "__main__":
+def main():
     app()
+
+if __name__ == "__main__":
+    main()

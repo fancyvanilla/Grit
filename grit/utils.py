@@ -1,5 +1,5 @@
 import json
-from enums import FileType
+from grit.enums import FileType
 import shutil
 import os
 

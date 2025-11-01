@@ -5,8 +5,8 @@ import json
 import hashlib
 import copy
 import difflib
-from utils import clean_path, detect_file_type, read_file, write_in_file, delete_contents, update_json
-from enums import GritFileType, FileType
+from grit.utils import clean_path, detect_file_type, read_file, write_in_file, delete_contents, update_json
+from grit.enums import GritFileType, FileType
 from typing import Tuple
 
 class GritRepository:
