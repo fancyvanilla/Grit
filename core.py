@@ -84,15 +84,31 @@ class GritRepository:
     def add(cls, path):
         path=cls.validate_path(path)
         if path is None:
+            raise ValueError("Invalid path!")
+        if os.path.isfile(path):
+            cls.add_file_section(path)
+        else:
+            cls.add_dir_to_staged_area(path)
+            cls.detect_removes()
+
+    @classmethod
+    def add_file_section(cls, file_path, line_start=None, line_end=None):
+        """ Add a specific section of a file to the staged area """
+        file_path = cls.validate_path(file_path)
+        if file_path is None or not os.path.isfile(file_path):
+            raise ValueError("Invalid path!")
+        files_to_ignore, _ = cls.get_ignored_files_and_folders()
+        if file_path in files_to_ignore:
             return
-        cls.add_dir_to_staged_area(path)
-        cls.detect_removes()
+        if line_end and line_start and line_end < line_start:
+            raise ValueError("Invalid indexes!")
+        cls.create_blob(file_path, line_start, line_end)
 
     @classmethod
     def commit(cls, message):
         commit_id, new_commit = cls.generate_commit(message)
-        commits_tree=read_file(cls.commit_tree_path(), FileType.JSON)
-        head=cls.load_head()
+        commits_tree = read_file(cls.commit_tree_path(), FileType.JSON)
+        head = cls.load_head()
         if head:
             previous_commit = commits_tree["commits"][head]
             files_changed, _ = cls.diff(previous_commit["objects_tree"]["tree"], new_commit["objects_tree"]["tree"])
@@ -146,7 +162,7 @@ class GritRepository:
         delete_contents("./")
         commits = read_file(cls.commit_tree_path(), FileType.JSON)
         if commit_id not in commits["commits"]:
-            print(f"Commit {commit_id} not found.")
+            print(f"Commit or branch {commit_id} not found.")
             return
         objects_tree = commits["commits"][commit_id]["objects_tree"]
         GritRepository._check_out(objects_tree["tree"], "./")
@@ -165,13 +181,14 @@ class GritRepository:
 
     @classmethod
     def list_branches(cls):
-        branches = read_file(cls.branches_path(), FileType.JSON)
+        branches = GritRepository.get_branches()
         current_branch = cls.load_current_branch()
-        for branch in branches["branches"]:
+        for branch in branches:
             if branch == current_branch:
                 print(f"* {branch}")
             else:
                 print(f"  {branch}")
+
     @classmethod
     def read_from_key(cls, key, file_type: FileType=FileType.TEXT):
         """ Read content from objects based on the blob key """
@@ -182,7 +199,7 @@ class GritRepository:
                 length = obj['length']
                 content = read_file(cls.objects_path(), FileType.BINARY, offset, length)
                 return cls.decompress_content(content, file_type)
-
+                  
     """ Grit helper methods """
     
     @classmethod
@@ -221,9 +238,12 @@ class GritRepository:
     def diff(cls, commit1, commit2):
         files_changed = []
         files_diff = {}
+        commits = cls.get_commits()
+        if commit1 not in commits or commit2 not in commits:
+            raise ValueError("Commit not found")
         GritRepository.compare_commits(
-            commit1,
-            commit2,
+            commits[commit1]["objects_tree"]["tree"],
+            commits[commit2]["objects_tree"]["tree"],
             files_changed,
             files_diff
         )
@@ -239,10 +259,11 @@ class GritRepository:
         file_path_parts = file_path.split("/")
         current_level = objects_tree['tree']
         idx = 0
-        while idx < len(file_path_parts):
+        file_parts_num = len(file_path_parts)
+        while idx < file_parts_num:
             if file_path_parts[idx] in current_level:
-                if current_level[file_path_parts[idx]].get("tree", -1) == -1:
-                    return current_level[file_path_parts[idx]]
+                if "tree" not in current_level[file_path_parts[idx]]:
+                    return current_level[file_path_parts[idx]]["blob_key"]
                 current_level = current_level[file_path_parts[idx]]['tree']
                 idx += 1
             else:
@@ -284,30 +305,81 @@ class GritRepository:
                 "length": object_length
             })
         write_in_file(cls.index_table_path(),objects,FileType.JSON)
-       
+
+    #FIX: make detect file type take file path instead of filename
     @classmethod
-    def create_blob(cls, file_path):
-        compressed_content = cls.compress_file(file_path)
-        blob_key = hashlib.sha1(compressed_content).hexdigest()
-        current_file_tree = cls.get_blob_key(file_path)
-        if (current_file_tree is not None and current_file_tree.get("blob_key") == blob_key):
-            print(f"No changes detected for file {file_path}")
-        else:
-            new_objects_tree = cls.update_objects_tree(file_path, blob_key)
-            write_in_file(cls.objects_tree_path(), new_objects_tree, type=FileType.JSON)
-            cls.update_index_table(blob_key, compressed_content)
-            write_in_file(cls.objects_path(), compressed_content, type=FileType.BINARY)
-            print(f"Detected changes for file {file_path}.")
+    def create_blob(cls, file_path, line_start=None, line_end=None):
+        current_content = read_file(file_path, FileType.UNKNOWN)
+        content = current_content
+        file_type = detect_file_type(file_path.split("/")[-1])
+        is_section = line_start is not None and line_end is not None and file_type == FileType.TEXT
+
+        # Make indexes zero based
+        if is_section:
+            line_start-=1
+            
+        prev_content = ""
+        if is_section:
+            content_in_lines = content.split("\n")
+            line_start = max(0, line_start)
+            line_end = min(len(content_in_lines), line_end)
+            content = content_in_lines[line_start:line_end]
+            content = "\n".join(content)
+
+        compressed_content = cls.compress_file(content)
+        current_blob_key = cls.create_blob_key(compressed_content)
+        content_to_add = content
+        previous_blob_key = cls.get_blob_key(file_path)
+
+        if previous_blob_key:
+            prev_content = cls.read_from_key(previous_blob_key, FileType.TEXT)
+            prev_content_in_lines = prev_content.split("\n")
+            if is_section:
+                previous_content_length = len(prev_content_in_lines)
+                if line_start <= previous_content_length and line_end <= previous_content_length:
+                    prev_section = prev_content_in_lines[line_start:line_end]
+                    prev_compressed_content = cls.compress_file("\n".join(prev_section))
+                    previous_blob_key = cls.create_blob_key(prev_compressed_content)
+                else:
+                    previous_blob_key = None
+
+            if (previous_blob_key is not None and previous_blob_key == current_blob_key):
+                print(f"No changes detected for file {file_path}")
+                return
+            else:
+                if is_section:
+                    if previous_blob_key is None:
+                        if line_start < len(prev_content_in_lines):
+                            diff_content = prev_content_in_lines[:line_start]
+                        else:
+                            diff_content = prev_content_in_lines
+                        content_to_add = "\n".join(diff_content)
+                        if content_to_add!="":
+                            content_to_add+="\n"
+                        content_to_add+=content
+                    else:
+                      content_to_add = "\n".join(prev_content_in_lines[:line_start])
+                      if content_to_add!="":
+                          content_to_add+="\n"
+                      content_to_add+= content
+                      if line_end < len(prev_content_in_lines):
+                          content_to_add +="\n"
+                      content_to_add+="\n".join(prev_content_in_lines[line_end:])
+                      
+        new_compressed_content = cls.compress_file(content_to_add)
+        current_blob_key = cls.create_blob_key(new_compressed_content)
+        new_objects_tree = cls.update_objects_tree(file_path, current_blob_key)
+        write_in_file(cls.objects_tree_path(), new_objects_tree, type=FileType.JSON)
+        cls.update_index_table(current_blob_key, new_compressed_content)
+        write_in_file(cls.objects_path(), new_compressed_content, type=FileType.BINARY)
+        print(f"Detected changes for file {file_path}.")
         
     @classmethod
     def detect_removes(cls):
-        with open(cls.objects_tree_path(), 'r+') as f:
-            objects_tree = json.load(f)
-            new_objects_tree = copy.deepcopy(objects_tree)
-            cls._detect_remove(objects_tree['tree'], "./", new_objects_tree['tree'])
-            f.seek(0)
-            json.dump(new_objects_tree, f, indent=4)
-            f.truncate()
+        objects_tree=read_file(cls.objects_tree_path(), FileType.JSON)
+        new_objects_tree=copy.deepcopy(objects_tree)
+        cls._detect_remove(objects_tree['tree'], "./", new_objects_tree['tree'])
+        write_in_file(cls.objects_tree_path(), new_objects_tree, type=FileType.JSON)
 
     @staticmethod
     def _detect_remove(level, path, new_objects_tree):
@@ -321,7 +393,7 @@ class GritRepository:
 
     @classmethod
     def compare_commits(cls, commit1, commit2, files_changed, files_diff, path=""):
-        for item in commit1.keys():
+        for item in commit1:
             current_path = os.path.join(path, item)
             if item not in commit2:
                 if "tree" in commit1[item]:
@@ -330,7 +402,7 @@ class GritRepository:
                     files_changed.append(current_path)
             else:
                 cls._compare_commit_items(commit1[item], commit2[item], files_changed, files_diff, current_path)
-        for item in commit2.keys():
+        for item in commit2:
             current_path = os.path.join(path, item)
             if item not in commit1:
                 files_changed.append(current_path)
@@ -367,7 +439,7 @@ class GritRepository:
     @classmethod
     def _check_out(cls, level, path):
         for item in level:
-            if level[item].get("blob_key", -1) != -1:  # item is a file
+            if level[item].get("blob_key", -1) != -1:  # item is a file 
                 file_type=detect_file_type(item)
                 content = cls.read_from_key(level[item]["blob_key"], file_type)
                 if content is not None:
@@ -377,7 +449,7 @@ class GritRepository:
                 if not os.path.exists(current_path):
                     os.makedirs(current_path)
                 cls._check_out(level[item]["tree"], current_path)
-
+    
     @staticmethod
     def validate_path(path: str) -> str | None:
         path = clean_path(path)
@@ -441,8 +513,7 @@ class GritRepository:
         return commit_id, new_commit
     
     @staticmethod
-    def compress_file(file_path):
-        content = read_file(file_path, FileType.UNKNOWN)
+    def compress_file(content):
         if isinstance(content, bytes):
             return content
         if isinstance(content, dict):
@@ -451,6 +522,10 @@ class GritRepository:
         return zlib.compress(content)
     
     @staticmethod
+    def create_blob_key(compressed_content):
+        return hashlib.sha1(compressed_content).hexdigest()
+
+    @staticmethod
     def decompress_content(compressed_content, file_type: FileType):
         if file_type == FileType.BINARY:
             return compressed_content
@@ -458,3 +533,12 @@ class GritRepository:
         if file_type == FileType.JSON:
             return json.loads(decompressed)
         return decompressed
+    
+    @classmethod
+    def get_branches(cls):
+        content = read_file(cls.branches_path(), FileType.JSON)
+        return content["branches"]
+    @classmethod
+    def get_commits(cls):
+        content=read_file(cls.commit_tree_path(), FileType.JSON)
+        return content["commits"]

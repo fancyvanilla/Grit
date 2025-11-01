@@ -18,12 +18,29 @@ def init(path: str = typer.Argument("./", help="Path to initialize repository"))
     hide_grit()
 
 @app.command()
-def add(paths: list[str] = typer.Argument(..., help="Files or directories to add")):
+def add(
+    paths: list[str] = typer.Argument(None, help="Files or directories to add"),
+    lines: str = typer.Option(
+        None, "--lines", help="Line range in the format start-end (1-based) to add from a single file"
+    ),
+):
     if not paths:
         paths = ["./"]
-    if not GritRepository.is_current_grit_repo():
-        print("Not a Grit repository (or any of the parent directories). Please run 'grit init' first.")
-        raise typer.Exit(code=1)
+    if lines:
+        if len(paths) != 1:
+            print("When --lines is provided, provide exactly one file path.")
+            raise typer.Exit(code=1)
+        try:
+            line_start, line_end = map(int, lines.split("-"))
+            GritRepository.add_file_section(paths[0], line_start, line_end)
+        except ValueError as e:
+            print(str(e))
+            raise typer.Exit(code=1)
+        #improve error handling the Exception is too general
+        # except Exception:
+        #     print("Invalid line range format. Use start-end (e.g., 5-10).")
+        #     raise typer.Exit(code=1)
+        return
     for p in paths:
         GritRepository.add(p)
 
@@ -48,22 +65,25 @@ def cat_file(
 
 @app.command()
 def diff(commit1: str, commit2: str):
-    files, files_diff = GritRepository.diff(commit1, commit2)
-    print("Files changed:")
-    for file in files:
+    try:
+      files, files_diff = GritRepository.diff(commit1, commit2)
+      print("Files changed:")
+      for file in files:
         print("*", file)
-    print("\nDifferences:")
-    if files_diff:
+      print("\nDifferences:")
+      if files_diff:
         for file, content in files_diff.items():
             print(f"* {file}:\n{content}\n")
-    else:
+      else:
         print("No differences found.")
-
+    except ValueError as e:
+        print(str(e))
+        raise typer.Exit(code=1)
+    
 @app.command()
 def branch(branch_name: str = typer.Argument(None, help="List the branches or create a new branch if branch name is provided")):
     if branch_name:
         GritRepository.branch(branch_name)
-        print(f"Branch '{branch_name}' created.")
     else:
         GritRepository.list_branches()
 
